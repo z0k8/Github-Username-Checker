@@ -1,5 +1,5 @@
-# Firebase Studio
+GitHunter - Check GitHub username availability.
 
-This is a NextJS starter in Firebase Studio.
+Note: GitHub API has rate limits. Unauthenticated requests are limited to ~60/hour.
 
-To get started, take a look at src/app/page.tsx.
+Be patient if throttling occurs; the app will pause and resume.
