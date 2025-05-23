@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -6,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Play, StopCircle, Download, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 
@@ -21,13 +23,14 @@ type AvailableUsername = {
 };
 
 const GITHUB_API_BASE_URL = "https://api.github.com/users/";
-const CHARACTERS = "abcdefghijklmnopqrstuvwxyz0123456789";
 const MIN_USERNAME_LENGTH = 1; // GitHub's actual min length
 const MAX_USERNAME_LENGTH = 39;
 const USER_INPUT_MIN_LENGTH = 3; // As per prompt
 
 export default function GitHunterPage() {
   const [usernameLength, setUsernameLength] = useState<string>("3");
+  const [excludeNumbers, setExcludeNumbers] = useState<boolean>(false);
+  const [specificNumbersToExclude, setSpecificNumbersToExclude] = useState<string>("");
   const [isHunting, setIsHunting] = useState<boolean>(false);
   const [availableUsernames, setAvailableUsernames] = useState<AvailableUsername[]>([]);
   const [logMessages, setLogMessages] = useState<LogMessage[]>([]);
@@ -50,9 +53,31 @@ export default function GitHunterPage() {
   }, [logMessages]);
 
   const generateUsername = (length: number): string => {
+    let availableChars = "abcdefghijklmnopqrstuvwxyz";
+    if (!excludeNumbers) {
+      let numbersToInclude = "0123456789";
+      if (specificNumbersToExclude.trim() !== "") {
+        const excludedDigits = specificNumbersToExclude
+          .split(',')
+          .map(d => d.trim())
+          .filter(d => d.length === 1 && "0123456789".includes(d));
+        
+        excludedDigits.forEach(digit => {
+          numbersToInclude = numbersToInclude.replace(new RegExp(digit, 'g'), "");
+        });
+      }
+      availableChars += numbersToInclude;
+    }
+
+    if (availableChars.length === 0) {
+      // This should ideally be caught by pre-validation in handleStartHunting
+      addLog("Internal Error: No characters available for username generation. Adjust settings.", "error");
+      return "ERROR_NO_CHARS"; 
+    }
+
     let result = "";
     for (let i = 0; i < length; i++) {
-      result += CHARACTERS.charAt(Math.floor(Math.random() * CHARACTERS.length));
+      result += availableChars.charAt(Math.floor(Math.random() * availableChars.length));
     }
     return result;
   };
@@ -79,8 +104,8 @@ export default function GitHunterPage() {
   const huntUsernames = async (length: number) => {
     setIsLoading(true);
     setIsHunting(true);
-    setLogMessages([]);
-    setAvailableUsernames([]);
+    // Clear logs for new hunt, but keep availableUsernames unless user explicitly clears them.
+    setLogMessages([]); 
     setStats({ attempts: 0, available: 0, taken: 0 });
     addLog(`Starting hunt for usernames of length ${length}...`, "info");
 
@@ -102,6 +127,14 @@ export default function GitHunterPage() {
         }
 
         const username = generateUsername(length);
+        if (username === "ERROR_NO_CHARS") {
+            addLog("Stopping hunt: No characters available for generation based on current settings.", "error");
+            if (abortControllerRef.current && !abortControllerRef.current.signal.aborted) {
+                abortControllerRef.current.abort();
+            }
+            break;
+        }
+        
         currentAttempts++;
         addLog(`Checking: ${username}`, "muted");
         setStats({ attempts: currentAttempts, available: currentAvailable, taken: currentTaken });
@@ -138,7 +171,6 @@ export default function GitHunterPage() {
         }
         setStats({ attempts: currentAttempts, available: currentAvailable, taken: currentTaken });
         
-        // Be nice to the API, small delay even if not throttled
         await delay(1500); // 1.5 second delay between checks
       }
     } catch (error: any) {
@@ -148,8 +180,8 @@ export default function GitHunterPage() {
     } finally {
       setIsHunting(false);
       setIsLoading(false);
-      if (!signal.aborted) { // If not aborted by user explicitly
-        addLog("Hunt finished or stopped due to error.", "info");
+      if (!signal.aborted) { 
+        addLog("Hunt finished or stopped.", "info");
       }
     }
   };
@@ -160,6 +192,31 @@ export default function GitHunterPage() {
       addLog(`Please enter a valid length between ${USER_INPUT_MIN_LENGTH} and ${MAX_USERNAME_LENGTH}. GitHub min is ${MIN_USERNAME_LENGTH}.`, "error");
       return;
     }
+
+    // Validate character set before starting
+    let availableChars = "abcdefghijklmnopqrstuvwxyz";
+    if (!excludeNumbers) {
+      let numbersToInclude = "0123456789";
+      if (specificNumbersToExclude.trim() !== "") {
+        const excludedDigits = specificNumbersToExclude
+          .split(',')
+          .map(d => d.trim())
+          .filter(d => d.length === 1 && "0123456789".includes(d));
+        excludedDigits.forEach(digit => {
+          numbersToInclude = numbersToInclude.replace(new RegExp(digit, 'g'), "");
+        });
+      }
+      availableChars += numbersToInclude;
+    }
+
+    if (availableChars.length === 0) {
+      addLog("Error: No characters available for username generation. Adjust exclusion settings.", "error");
+      return;
+    }
+    if (len > 0 && availableChars.length < 2 && len > 1) { // Arbitrary threshold for "very small"
+         addLog("Warning: The available character set is very small. This may result in many repeated checks or slow progress.", "info");
+    }
+
     huntUsernames(len);
   };
 
@@ -169,7 +226,7 @@ export default function GitHunterPage() {
     }
     setIsHunting(false);
     setIsLoading(false);
-    setIsThrottled(false); // Reset throttle state on manual stop
+    setIsThrottled(false); 
     addLog("Hunting stopped by user.", "info");
   };
 
@@ -194,13 +251,13 @@ export default function GitHunterPage() {
 
   const getLogMessageColor = (type: LogMessage["type"]): string => {
     switch (type) {
-      case "success": return "text-green-400"; // A general green for success
+      case "success": return "text-green-400";
       case "error": return "text-destructive";
-      case "accent": return "text-accent"; // Neon green for available usernames
+      case "accent": return "text-accent";
       case "muted": return "text-muted-foreground";
       case "info":
       default:
-        return "text-foreground"; // Electric blue
+        return "text-foreground";
     }
   };
 
@@ -231,6 +288,42 @@ export default function GitHunterPage() {
               className="bg-input border-border text-foreground placeholder-muted-foreground focus:ring-ring"
             />
           </div>
+
+          <div className="flex items-center space-x-2 pt-2">
+            <Checkbox
+              id="excludeNumbers"
+              checked={excludeNumbers}
+              onCheckedChange={(checked) => setExcludeNumbers(Boolean(checked))}
+              disabled={isHunting || isLoading}
+              className="border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground"
+            />
+            <Label
+              htmlFor="excludeNumbers"
+              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-foreground"
+            >
+              Exclude all numbers
+            </Label>
+          </div>
+
+          <div>
+            <Label htmlFor="specificNumbersToExclude" className="text-foreground">
+              Specific numbers to exclude (comma-separated)
+            </Label>
+            <Input
+              id="specificNumbersToExclude"
+              type="text"
+              value={specificNumbersToExclude}
+              onChange={(e) => setSpecificNumbersToExclude(e.target.value.replace(/[^0-9,]/g, ''))}
+              disabled={isHunting || isLoading || excludeNumbers}
+              className="bg-input border-border text-foreground placeholder-muted-foreground focus:ring-ring"
+              placeholder="e.g., 1,3,5"
+            />
+            {excludeNumbers && (
+              <p className="text-xs text-muted-foreground mt-1">Disabled because all numbers are excluded.</p>
+            )}
+          </div>
+
+
           {!isHunting ? (
             <Button onClick={handleStartHunting} disabled={isLoading} className="w-full bg-primary text-primary-foreground hover:bg-primary/90">
               {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
@@ -303,3 +396,5 @@ export default function GitHunterPage() {
     </div>
   );
 }
+
+    
